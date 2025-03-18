@@ -3,6 +3,7 @@ import random
 from collections import OrderedDict
 
 import torch
+import tqdm
 import websockets
 from torch.utils.data import DataLoader
 from torch import nn
@@ -83,7 +84,7 @@ class Client(object):
 
     async def train(self):
         self.model.train()
-        for batch_idx, (images, labels) in enumerate(self.ldr_train):
+        for batch_idx, (images, labels) in enumerate(tqdm.tqdm(self.ldr_train)):
             images = images.to(self.device)
             self.optimizer.zero_grad()
             # ---------forward prop-------------
@@ -127,7 +128,7 @@ class Client(object):
         elif order_cnt[2] > total_order * 0.6:
             self.DecreasedComputationalPressure()
 
-    async def client_run(self, sever_path='ws://localhost:9000', fed_path='ws://localhost:8889'):
+    async def client_run(self, sever_path='ws://192.168.31.161:9000', fed_path='ws://localhost:8889'):
         async with websockets.connect(sever_path, max_size=2 ** 60) as self.calculate_server_websocket:
             # async with websockets.connect(fed_path) as self.fed_server_websocket:
             while True:

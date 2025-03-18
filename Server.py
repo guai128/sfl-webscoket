@@ -9,6 +9,7 @@ import websockets
 from torch import nn
 from ConsumeQueue import ConsumeQueue
 from ResNet import all_layers
+from utils import prRed
 
 
 # non-normal server model should contain 3 to 4 layers
@@ -79,11 +80,11 @@ class Server:
         criterion = nn.CrossEntropyLoss()
 
         def trainOneRound():
-            un_arrive_clients = list(self.clients.copy())
+            if len(self.clients) == 0:
+                return
+            all_clients, un_arrive_clients = list(self.clients.copy()), list(self.clients.copy())
             round_start_time = time.time()
             arrive_time = [0. for _ in range(len(un_arrive_clients))]
-            # 我们假设服务端的运算能力是足够的，所以我们不会因为服务端的运算能力不足而导致客户端的等待
-            # 因此需要剔除服务端的运算时间
             last_arrive_time, delay_avg, calculate_time = 0., 0., 0.
             while len(un_arrive_clients) > 0:
                 # if the server has been waiting for too long, it will stop waiting
@@ -93,20 +94,20 @@ class Server:
                     tolerance = delay_avg / arrive_client_cnt
                     current_time = time.time() - calculate_time - round_start_time
                     if current_time - last_arrive_time > tolerance:
-                        break
+                        pass  # or break
 
                 visited = set()
-                for idx, client_id in enumerate(un_arrive_clients):
-                    if client_id not in self.clients:
-                        visited.add(client_id)
+                for client in un_arrive_clients:
+                    if client not in self.clients:
+                        visited.add(client)
                         continue
 
-                    client_data = self.consume_queue.consumeNonBlock(f"Client{client_id}ForServer")
+                    client_data = self.consume_queue.consumeNonBlock(f"Client{client}ForServer")
                     if client_data is None:
                         continue
 
                     last_arrive_time = time.time() - calculate_time - round_start_time
-                    arrive_time[idx] = last_arrive_time
+                    arrive_time[all_clients.index(client)] = last_arrive_time
 
                     # start to calculate the time
                     calculate_start_time = time.time()
@@ -145,11 +146,11 @@ class Server:
 
                     # send the gradients to the client
                     dfx_client = client_fx.grad.cpu().detach().numpy().tobytes()
-                    self.consume_queue.produce(f"ServerForClient{client_id}", dfx_client)
+                    self.consume_queue.produce(f"ServerForClient{client}", dfx_client)
 
                     optimizer_server_non_normal.step()
                     optimizer_server_normal.step()
-                    visited.add(client_id)
+                    visited.add(client)
 
                     # complete the calculate time
                     # calculate_time += time.time() - calculate_start_time
@@ -161,10 +162,10 @@ class Server:
             # # 记录用户惩罚和奖励
             # for client in un_arrive_clients:
             #     self.consume_queue.produce(f"ServerForClient{client}Order", 2)
-            # prRed(f"clients arrive time: {arrive_time}")
-            # if len(un_arrive_clients) > 0:
-            #     prRed(f"latency: {time.time() - round_start_time} there are {len(un_arrive_clients)} clients not finished")
-            #
+            prRed(f"clients arrive time: {arrive_time}")
+            if len(un_arrive_clients) > 0:
+                prRed(f"latency: {time.time() - round_start_time} there are {len(un_arrive_clients)} clients not finished")
+
             # for idx in self.clients:
             #     if idx not in un_arrive_clients:
             #         if arrive_time[idx] < delay_avg * 0.5:
@@ -186,22 +187,23 @@ class Server:
     def isConvergence(self):
         return False
 
-    # 接收客户端消息并处理，这里只是简单把客户端发来的返回回去
     async def onMessage(self, websocket, path):
         try:
             self.register_client(websocket)
+            print(f"Client {self.websocketToClientID(websocket)} connected")
             while True:
                 data = await websocket.recv()
                 self.consume_queue.produce(f"Client{self.websocketToClientID(websocket)}ForServer", data)
-                response_data = asyncio.run(asyncio.to_thread(
+                response_data = await asyncio.to_thread(
                     self.consume_queue.consume, f"ServerForClient{self.websocketToClientID(websocket)}"
-                ))
+                )
                 await websocket.send(response_data)
 
-        except websockets.ConnectionClosed:
+        except websockets.WebSocketException:
             self.unregister_client(websocket)
+            print(f"Client {self.websocketToClientID(websocket)} disconnected")
 
-    def mainloop(self, host='localhost', port=9000):
+    def mainloop(self, host='192.168.31.161', port=9000):
         calculate_thread = Thread(target=self.server_run)
         calculate_thread.daemon = True
         calculate_thread.start()
